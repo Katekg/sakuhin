@@ -538,9 +538,18 @@ async function addFromQueue(day, id) {
   await saveDay(day, items);
   await db.doc("works/" + id).update({ status: "following", progress: w.progress || "第1話から", updatedAt: now() });
 }
+// 曜日を開く。開いたら、新着を確認したことにする（印は、開いているあいだだけ残す）
+function openDay(k) {
+  openDays.add(k);
+  const its = itemsOf(daily[k]), cs = cands.filter(c => c.day === k && !its.some(x => normT(x.title) === normT(c.title)));
+  const fr = new Set(cs.filter(c => isNewCand(k, c)).map(c => c.id));
+  if (fr.size) { freshIds[k] = fr; const rec = candState[k] || { open: false }; candState[k] = { open: rec.open, ids: cs.map(c => c.id) }; store.set("daily-cand", candState); }
+}
+let dayInit = false;   // アプリを開いて、データが入って最初に描くとき、今日の曜日だけ開いておく
 function drawDaily() {
   const box = $("#dailyBox"); if (!box) return;
   if (!loaded) { box.innerHTML = ""; return; }
+  if (!dayInit) { dayInit = true; openDay(todayKey()); }
   const tk = todayKey();
   const anchors = firstDraw ? null : takeAnchors(box); firstDraw = false;
   const rnd = randPicks();
@@ -571,13 +580,7 @@ function drawDaily() {
   box.innerHTML = `<section class="sec">${refreshWarn()}<div class="dlist" id="dloop">${rowsOf(0)}</div></section>`;
   box.querySelectorAll("[data-day]").forEach(b => b.onclick = () => {
     const k = b.dataset.day, find = () => box.querySelector('[data-day="' + k + '"]'), top0 = b.getBoundingClientRect().top;
-    if (openDays.has(k)) { openDays.delete(k); delete freshIds[k]; }
-    else {
-      openDays.add(k);
-      // 開いたら、新着を確認したことにする（印は、開いているあいだだけ残す）
-      const its = itemsOf(daily[k]), cs = cands.filter(c => c.day === k && !its.some(x => normT(x.title) === normT(c.title)));
-      const fr = new Set(cs.filter(c => isNewCand(k, c)).map(c => c.id)); if (fr.size) { freshIds[k] = fr; const rec = candState[k] || { open: false }; candState[k] = { open: rec.open, ids: cs.map(c => c.id) }; store.set("daily-cand", candState); }
-    }
+    if (openDays.has(k)) { openDays.delete(k); delete freshIds[k]; } else openDay(k);
     drawDaily(); keepPos(find, top0);
   });
   box.querySelectorAll("[data-tg]").forEach(b => b.onclick = () => {

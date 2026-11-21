@@ -419,9 +419,12 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); }
 .tbadge.un { background: var(--butter); color: var(--butter-ink); }
 .tbadge.nw { background: var(--alert-fill); color: var(--alert); }
 .dbodyw { display: grid; gap: 8px; min-width: 0; padding: 8px 10px 10px; border-top: 1px dashed var(--line); }
+/* 上の「帯」: 画面の一番上（ステータスバーの高さ）に、ページと同じ色の帯を固定する。iPhoneは、上に不透明な固定の帯があるとその色をそのまま出し、無いとグラデーションのもやをかける */
+#topband { position: fixed; top: 0; left: 0; right: 0; height: calc(env(safe-area-inset-top, 0px) + 6px); background: var(--bg); z-index: 40; }
+#scr { top: calc(env(safe-area-inset-top, 0px) + 6px); }
 </style>
 
-<div id="scr"><div class="wrap" id="app" lang="ja"></div></div>
+<div id="topband"></div><div id="scr"><div class="wrap" id="app" lang="ja"></div></div>
 
 <script src="app.js"></script>
 
