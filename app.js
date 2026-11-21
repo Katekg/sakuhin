@@ -40,7 +40,8 @@ const SVC = {
 const SVC_ORDER = ["netflix", "hulu", "tver", "abema"];
 const cleanQ = t => String(t || "").replace(/[【\[（(][^】\]）)]*[】\]）)]/g, "").trim() || String(t || "");
 function availOf(e) { if (Array.isArray(e.avail) && e.avail.length) return e.avail; const s = String(e.service || ""); return SVC_ORDER.filter(k => new RegExp(SVC[k].label, "i").test(s)); }
-function pickSvc(e) { const av = availOf(e); if (e.first && av.includes(e.first)) return e.first; return SVC_ORDER.find(k => av.includes(k)) || null; }
+// 見るサービス: 自分で選んだもの（links.pick）が最優先。無ければ、見られるサービスのうち Netflix → Hulu → TVer → ABEMA の順
+function pickSvc(e) { const pk = e.links && typeof e.links === "object" ? e.links.pick : ""; if (pk && SVC[pk]) return pk; const av = availOf(e); return SVC_ORDER.find(k => av.includes(k)) || null; }
 function watchLink(e) {
   const k = pickSvc(e); if (!k) return "";
   const href = (e.links && e.links[k]) || SVC[k].url(cleanQ(e.title));
@@ -87,7 +88,7 @@ function keyGate(msg) {
 }
 let keyAsked = false;
 const keyErr = e => { if (/KEY/.test(String((e && e.message) || e)) && !keyAsked) { keyAsked = true; try { localStorage.removeItem("sakuhinKey"); } catch (x) {} keyGate(apiKey() ? "鍵がちがいます。もう一度入れてください。" : ""); } throw e; };
-const rpc = (fn, ...args) => (inGAS
+const rpc0 = (fn, ...args) => (inGAS
   ? new Promise((resolve, reject) => {
       try { google.script.run.withSuccessHandler(resolve).withFailureHandler(e => reject(new Error((e && e.message) || String(e)))).api(fn, apiKey(), args); }
       catch (e) { reject(e); }
@@ -95,6 +96,14 @@ const rpc = (fn, ...args) => (inGAS
   : fetch(API_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ fn, key: apiKey(), args }) })
       .then(r => r.json()).then(j => { if (!j.ok) throw new Error(j.error); return j.r; })
 ).catch(keyErr);
+// 書き込み（保存・追加・更新・削除）の数を数える。読み込み（loadAll）の最中に書き込みがあったら、その読み込みの結果は古いので捨てる
+// （捨てないと、押した「見た」が、あとから届いた古いデータで元に戻ってしまう）
+let writeRev = 0, pendingWrites = 0;
+const isWriteFn = fn => /^(add|update|set|remove|save)/.test(fn);
+const rpc = async (fn, ...args) => {
+  const w = isWriteFn(fn); if (w) { pendingWrites++; writeRev++; }
+  try { return await rpc0(fn, ...args); } finally { if (w) { pendingWrites--; writeRev++; } }
+};
 if (!inGAS && !apiKey()) keyGate();
 const clean = o => JSON.parse(JSON.stringify(o === undefined ? null : o));
 // 以前の db（claude.use("db")）と同じ使い方ができる小さな入れ物。変更は手元の状態に即反映し、シートにも書く
@@ -134,7 +143,8 @@ const db = {
 };
 async function reloadAll() {
   try {
-    const d = await rpc("loadAll");
+    const rev0 = writeRev, d = await rpc("loadAll");
+    if (loaded && (writeRev !== rev0 || pendingWrites > 0)) { setTimeout(reloadAll, 1500); return; }   // 読み込み中に書き込みがあった: この結果は古いので使わず、少し待ってもう一度
     works = d.works || []; daily = d.daily || {}; cands = d.cands || []; taste = d.taste || {}; services = d.services || []; picks = d.picks || []; chats = d.chats || []; sheetUrl = d.sheetUrl || ""; refreshInfo = d.refreshInfo && d.refreshInfo.lastRunAt ? d.refreshInfo : null;
     loaded = true; dbState = "ready"; lastLoad = Date.now();
   } catch (e) { if (!loaded) { dbState = "off"; loadError = e.message || ""; } }
@@ -459,6 +469,14 @@ let editLatestKey = "", latestAsk = null;
 // アニメで、最新話がアプリで確認できない（最新話が未設定、または確認日が7日以上前）もの。赤い細い枠で囲み、「最新まで見た」には移さない
 const staleDays = (s, is) => Number(s.latest) && s.latestAt && is !== "final" && is !== "done" ? Math.floor((Date.now() - Date.parse(s.latestAt + "T00:00:00")) / 864e5) : 0;
 const isUnsure = (s, is) => s.kind === "anime" && is !== "final" && is !== "done" && (!Number(s.latest) || staleDays(s, is) >= 7);
+async function setPick(day, i, key) {   // 見るサービスを自分で選ぶ（key が空なら、おまかせ＝自動に戻す）
+  if (!db) return;
+  const items = itemsOf(daily[day]).map(x => ({ ...x })), it = items[i]; if (!it) return;
+  const links = { ...(it.links && typeof it.links === "object" ? it.links : {}) };
+  if (key) links.pick = key; else delete links.pick;
+  it.links = links;
+  await saveDay(day, items);
+}
 async function setLatest(day, i, n) {
   if (!db) return;
   const items = itemsOf(daily[day]).map(x => ({ ...x })), it = items[i]; if (!it) return;
@@ -561,7 +579,7 @@ function drawDaily() {
       const stale = staleDays(s, is), ask = latestAsk && latestAsk.key === k + ":" + i ? latestAsk : null;
       const tags = `${stale >= 7 ? `<span class="dstate stale">話数は${esc(String(s.latestAt).slice(5, 10).replace("-", "/"))}時点</span>` : ""}${rateOn && wk.rating == null ? `<span class="dstate near">★をつける</span>` : ""}${miss ? `<span class="dstate near">見逃し注意</span>` : ""}${is === "ok" ? "" : `<span class="dstate ${is}">${STATE_LABEL[is]}</span>`}`;
       const rateForm = rateOn ? `<div class="ratef" data-rf="${esc(wk.id)}"><div class="rrow"><label>★ <input class="rin" type="number" inputmode="decimal" step="0.1" min="0" max="5" value="${wk.rating ?? ""}" placeholder="0〜5"></label><input class="rnote" value="${esc(wk.note)}" placeholder="ひとこと" autocomplete="off"></div><textarea class="rmemo" placeholder="感想・メモ">${esc(wk.memo)}</textarea><div class="rrow"><button class="btn" type="button" data-rs="${esc(wk.id)}">評価を保存</button><span class="ok rok">${justSaved(wk.id) ? "保存しました" : ""}</span></div></div>` : "";
-      const more = open ? `<div class="dmore"><span class="meta">${itemMeta(s)}</span>${watchLink(s) ? `<span class="meta">${watchLink(s)}${whenText(s)}</span>` : ""}<span class="meta">${latestText(s)}${s.finalDate ? ` ・ 最終回 ${esc(s.finalDate)}` : ""} ・ <button class="linkbtn" type="button" data-dl="${k}:${i}">視聴可能話数を${Number(s.latest) ? "変更" : "設定"}</button></span>${unsure ? `<span class="meta" style="color:var(--alert)">最新話をアプリで確認できていません。配信サイトを見て、視聴可能話数（／◯話）を実際の数に直してください。</span>` : ""}${miss ? `<span class="meta" style="color:var(--butter-ink)">TVerの見逃し配信のみ。契約中のサービスでは見られません</span>` : ""}<span class="meta"><a class="ext" href="${esc(searchUrl(s.title, s.kind))}" target="_blank" rel="noopener noreferrer">ネットで検索</a>${s.workId ? ` ・ <a class="ext" href="#w-${esc(s.workId)}">作品のページ</a>` : ""} ・ ${rmHtml(k, i)}</span>${rateForm}</div>` : "";
+      const more = open ? `<div class="dmore"><span class="meta">${itemMeta(s)}</span>${watchLink(s) ? `<span class="meta">${watchLink(s)}${whenText(s)}</span>` : ""}<span class="meta svcpick">見るサイト: ${SVC_ORDER.map(sk => `<button class="svcb ${pickSvc(s) === sk ? "on" : ""}" type="button" data-sp="${k}:${i}:${sk}">${SVC[sk].label}</button>`).join("")}${s.links && s.links.pick ? `<button class="linkbtn" type="button" data-sp="${k}:${i}:">おまかせに戻す</button>` : `<small>（自動）</small>`}</span><span class="meta">${latestText(s)}${s.finalDate ? ` ・ 最終回 ${esc(s.finalDate)}` : ""} ・ <button class="linkbtn" type="button" data-dl="${k}:${i}">視聴可能話数を${Number(s.latest) ? "変更" : "設定"}</button></span>${unsure ? `<span class="meta" style="color:var(--alert)">最新話をアプリで確認できていません。配信サイトを見て、視聴可能話数（／◯話）を実際の数に直してください。</span>` : ""}${miss ? `<span class="meta" style="color:var(--butter-ink)">TVerの見逃し配信のみ。契約中のサービスでは見られません</span>` : ""}<span class="meta"><a class="ext" href="${esc(searchUrl(s.title, s.kind))}" target="_blank" rel="noopener noreferrer">ネットで検索</a>${s.workId ? ` ・ <a class="ext" href="#w-${esc(s.workId)}">作品のページ</a>` : ""} ・ ${rmHtml(k, i)}</span>${rateForm}</div>` : "";
       return { seen, html: `<div class="dline ${seen ? "seen" : miss ? "miss" : ""} ${unsure ? "unsure" : ""} ${open ? "open" : ""}" data-ak="l:${k}:${esc(key)}"><div class="dtop"><button class="dtitle" type="button" data-tg="${esc(key)}">${esc(s.title)}<span class="chev">${open ? "▲" : "▼"}</span></button>${actHtml(k, i, s, seen, copy)}</div><div class="dsub">${watchChip(s)}<span>${latestShort}</span>${s.filmarks != null ? `<span class="fmv">★${Number(s.filmarks).toFixed(1)}</span>` : ""}${tags}</div>${more}${ask ? `<div class="lask"><span>視聴可能話数を変更しようとしています、正しいですか？（${Number(s.latest) ? esc(s.latest) + "話" : "未設定"} → ${ask.n}話）</span><div class="rrow"><button class="btn" type="button" data-ly="${k}:${i}">はい、変更する</button><button class="btn ghost" type="button" data-ln="${k}:${i}">やめる</button></div></div>` : ""}</div>` }; });
     const seenRows = rows.filter(r => r.seen), items = its.length
       ? rows.filter(r => !r.seen).map(r => r.html).join("") + (seenRows.length ? `<details class="seenf" data-sf="${k}" data-ak="s:${k}" ${seenState[k] ? "open" : ""}><summary>最新まで見た（${seenRows.length}件）</summary>${seenRows.map(r => r.html).join("")}</details>` : "")
@@ -628,6 +646,7 @@ function drawDaily() {
     lin.onblur = () => fin(true);
     lin.focus(); lin.select();
   }
+  box.querySelectorAll("[data-sp]").forEach(b => b.onclick = () => { const [d, i, sk] = b.dataset.sp.split(":"); setPick(d, +i, sk).catch(() => {}); });
   box.querySelectorAll("[data-ly]").forEach(b => b.onclick = async () => {
     const a = latestAsk; if (!a || a.key !== b.dataset.ly) return; const [d, i] = a.key.split(":"); b.disabled = true;
     try { await setLatest(d, +i, a.n); latestAsk = null; } catch { b.disabled = false; b.textContent = "失敗。もう一度"; return; }

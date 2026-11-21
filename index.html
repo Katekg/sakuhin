@@ -422,6 +422,10 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); }
 /* 上の「帯」: 画面の一番上（ステータスバーの高さ）に、ページと同じ色の帯を固定する。iPhoneは、上に不透明な固定の帯があるとその色をそのまま出し、無いとグラデーションのもやをかける */
 #topband { position: fixed; top: 0; left: 0; right: 0; height: calc(env(safe-area-inset-top, 0px) + 6px); background: var(--bg); z-index: 40; }
 #scr { top: calc(env(safe-area-inset-top, 0px) + 6px); }
+.svcpick { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.svcb { font: inherit; font-size: .72rem; font-weight: 700; padding: 1px 9px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg); color: var(--muted); cursor: pointer; }
+.svcb.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.svcpick small { color: var(--muted); }
 </style>
 
 <div id="topband"></div><div id="scr"><div class="wrap" id="app" lang="ja"></div></div>
