@@ -81,7 +81,7 @@ const inGAS = typeof google !== "undefined" && google.script && google.script.ru
 const apiKey = () => { try { return localStorage.getItem("sakuhinKey") || ""; } catch (e) { return ""; } };
 function keyGate(msg) {
   const d = document.createElement("div");
-  d.innerHTML = `<form style="position:fixed;inset:0;z-index:9999;background:#f6f4ef;display:grid;place-content:center;gap:12px;padding:24px;font:15px -apple-system,sans-serif;text-align:center"><b style="font-size:1.2rem">作品鑑賞帳</b><span>${msg || "鍵（合言葉）を入れてください。最初の1回だけです。"}</span><input name="k" autocomplete="off" autocapitalize="off" spellcheck="false" style="font-size:16px;padding:10px 12px;border:1.5px solid #bbb;border-radius:12px;text-align:center" placeholder="xxxx-xxxx-xxxx-xxxx"><button style="font-size:16px;padding:10px;border:0;border-radius:12px;background:#444;color:#fff">開く</button></form>`;
+  d.innerHTML = `<form style="position:fixed;inset:0;z-index:9999;background:#f3f4fb;display:grid;place-content:center;gap:12px;padding:24px;font:15px -apple-system,sans-serif;text-align:center"><b style="font-size:1.2rem">作品鑑賞帳</b><span>${msg || "鍵（合言葉）を入れてください。最初の1回だけです。"}</span><input name="k" autocomplete="off" autocapitalize="off" spellcheck="false" style="font-size:16px;padding:10px 12px;border:1.5px solid #bbb;border-radius:12px;text-align:center" placeholder="xxxx-xxxx-xxxx-xxxx"><button style="font-size:16px;padding:10px;border:0;border-radius:12px;background:#444;color:#fff">開く</button></form>`;
   d.querySelector("form").addEventListener("submit", e => { e.preventDefault(); const v = d.querySelector("input").value.trim(); if (!v) return; try { localStorage.setItem("sakuhinKey", v); } catch (x) {} location.reload(); });
   document.body.appendChild(d);
 }
