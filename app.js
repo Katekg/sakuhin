@@ -371,12 +371,18 @@ const savePicked = () => store.set("daily-picked", [...picked]);
 const candState = store.get("daily-cand") || {};
 // 「最新まで見た」の開閉: 初期は閉じる。開いたら、描き直しても開いたまま（曜日ごとに覚える）
 const seenState = store.get("daily-seenf") || {};
+// 追いかけタブの曜日の開閉（開いている曜日）。新着の印: 前に確認した候補のid（candState）にない候補は「新着」。曜日を開いたら確認したことにして、開いているあいだだけ強調を残す（freshIds）
+const openDays = new Set(), freshIds = {};
+const isNewCand = (k, c) => { const rec = candState[k]; return !!rec && !(rec.ids || []).includes(c.id); };
+const isFresh = (k, c) => isNewCand(k, c) || !!(freshIds[k] && freshIds[k].has(c.id));
+const startOfCand = c => c && c.links && typeof c.links === "object" && c.links.start ? String(c.links.start) : "";
+const mdw = ymd => { const d = new Date(ymd + "T00:00:00"); return `${d.getMonth() + 1}/${d.getDate()}（${"日月火水木金土"[d.getDay()]}）`; };
 // 追いかけタブを開いたとき（最初・ほかのタブから戻ったとき）、今日の曜日の行へスクロールする。データが入って行の高さが変わる間は合わせ直し、ユーザーが自分でスクロールしたら止める
-const LOOP_COPIES = 5, LOOP_MID = 2;   // 曜日の一覧を5つ並べ、真ん中（3つ目）を見る
+const LOOP_MID = 0;   // （以前の「曜日をぐるぐる」の名残。曜日の一覧は1つだけになった）
 let scrollUntil = 0, userScrolled = false, firstDraw = false;
 // 画面を動かしている要素を探す。CSSで html と body の両方に overflow-x:hidden を付けているため、body 自身が縦スクロールの要素になる（window.scrollY は常に0）。
 // 変わっても動くよう、実際にスクロールできる方を使う。
-function scEl() { const b = document.body, d = document.scrollingElement || document.documentElement; return (b.scrollHeight > b.clientHeight + 2 && b.scrollHeight - b.clientHeight > d.scrollHeight - d.clientHeight) ? b : d; }
+function scEl() { const sc = document.getElementById("scr"); if (sc) return sc; const b = document.body, d = document.scrollingElement || document.documentElement; return (b.scrollHeight > b.clientHeight + 2 && b.scrollHeight - b.clientHeight > d.scrollHeight - d.clientHeight) ? b : d; }
 function scY() { return scEl().scrollTop; }
 function scTo(y) { scEl().scrollTop = y; }
 let anchorGen = 0, formDirty = false, savedMark = { id: "", t: 0 };
@@ -391,9 +397,9 @@ function keepPos(find, top0) {
   fix(); [60, 200, 450].forEach(t => setTimeout(fix, t));
 }
 // 曜日の一覧を描き直すとき、画面の上のほうに見えている要素を覚えておき、描き直したあと同じ位置に戻す（見たを押して作品が移動したときなど、画面がずれないように）
-const akId = el => { const cp = el.closest(".dcopy"); return (cp ? cp.dataset.copy : "") + "|" + el.dataset.ak; };
+const akId = el => el.dataset.ak;
 function takeAnchors(box) {
-  const lb = $("#limBar"), stk = lb ? lb.getBoundingClientRect().bottom : 0, H = window.innerHeight, out = [];
+  const stk = scEl().getBoundingClientRect().top, H = window.innerHeight, out = [];
   for (const el of box.querySelectorAll("[data-ak]")) { const top = el.getBoundingClientRect().top; if (top >= stk && top < H) { out.push({ id: akId(el), top }); if (out.length >= 4) break; } }
   return out;
 }
@@ -403,7 +409,6 @@ function restoreAnchors(box, list) {
   for (const a of list) { const el = map.get(a.id); if (!el || !el.getClientRects().length) continue; const dy = el.getBoundingClientRect().top - a.top; if (Math.abs(dy) > 1) scTo(scY() + dy); return; }
 }
 ["wheel", "touchmove", "keydown"].forEach(ev => window.addEventListener(ev, () => { userScrolled = true; anchorGen++; }, { passive: true }));
-function scrollToToday(box) { if (userScrolled || Date.now() > scrollUntil) return; const el = box.querySelectorAll(".drow.today")[LOOP_MID] || box.querySelector(".drow.today"); if (el) requestAnimationFrame(() => el.scrollIntoView({ block: "start" })); }
 const saveDay = (day, items) => db.doc("daily/" + day).set({ day, items, updatedAt: now() });
 async function toggleSeen(day, i) {
   if (!db) return;
@@ -536,10 +541,10 @@ async function addFromQueue(day, id) {
 function drawDaily() {
   const box = $("#dailyBox"); if (!box) return;
   if (!loaded) { box.innerHTML = ""; return; }
-  const tk = todayKey(), al = needAlert();
-  const anchors = (!firstDraw && (userScrolled || Date.now() > scrollUntil)) ? takeAnchors(box) : null;
+  const tk = todayKey();
+  const anchors = firstDraw ? null : takeAnchors(box); firstDraw = false;
   const rnd = randPicks();
-  const rowsOf = copy => DAYS.map(([k, l]) => {
+  const rowsOf = copy => DAYS.map(([k, l]) => {   // copy は使わない（以前の名残）
     const its = itemsOf(daily[k]), st = dayState(k), cs = cands.filter(c => c.day === k && !its.some(x => normT(x.title) === normT(c.title)));
     const rows = its.map((s, i) => { const is = itemState(s), unsure = isUnsure(s, is), seen = isSeen(k, s) && !unsure, miss = !seen && missable(s), key = normT(s.title), open = openRows.has(key);
       const latestShort = Number(s.latest) ? `最新${esc(s.latest)}話${s.total ? "/全" + esc(s.total) : ""}` : "最新未確認";
@@ -552,16 +557,29 @@ function drawDaily() {
     const seenRows = rows.filter(r => r.seen), items = its.length
       ? rows.filter(r => !r.seen).map(r => r.html).join("") + (seenRows.length ? `<details class="seenf" data-sf="${k}" data-ak="s:${k}" ${seenState[k] ? "open" : ""}><summary>最新まで見た（${seenRows.length}件）</summary>${seenRows.map(r => r.html).join("")}</details>` : "")
       : `<div class="dline"><div class="dmain"><span class="dstate empty">${STATE_LABEL.empty}</span></div></div>`;
-    const sel = cs.filter(c => picked.has(c.id)).length, rec = candState[k], candOpen = rec ? (rec.open || cs.some(c => !(rec.ids || []).includes(c.id))) : st !== "ok";
+    const sel = cs.filter(c => picked.has(c.id)).length, rec = candState[k], candOpen = rec ? (rec.open || cs.some(c => isFresh(k, c))) : st !== "ok", newN = cs.filter(c => isFresh(k, c)).length;
     const rhtml = rnd.length ? `<div class="subh">観たいリストから（見放題）</div>${rnd.map(w => { const rk = "r:" + w.id, op = openRows.has(rk), sv = paidSvcs(w);
       return `<div class="cand rnd ${op ? "open" : ""}" data-ak="n:${k}:${esc(w.id)}"><div class="dtop"><button class="dtitle" type="button" data-tg="${esc(rk)}">${esc(w.title)}<span class="chev">${op ? "▲" : "▼"}</span></button><button class="btn" type="button" data-rw="${k}:${esc(w.id)}">この曜日に見る</button></div><div class="dsub"><span class="rtag">${esc(sv.join("・"))}で見放題</span><span>${esc(KL[w.kind] || "")}</span>${w.avg != null ? `<span class="fmv">★${Number(w.avg).toFixed(1)}</span>` : ""}</div>${op ? `<div class="dmore"><span class="meta">${esc(w.service || "")}${w.note ? " ・ " + esc(w.note) : ""}</span><span class="meta"><a class="ext" href="${esc(searchUrl(w.title, w.kind))}" target="_blank" rel="noopener noreferrer">ネットで検索</a> ・ <a class="ext" href="#w-${esc(w.id)}">作品のページ</a></span></div>` : ""}</div>`; }).join("")}` : "";
     const pick = (cs.length || rnd.length)
-      ? `<details class="cands" data-d="${k}" data-ak="d:${k}" ${candOpen ? "open" : ""}><summary>候補（${cs.length + rnd.length}件）${sel ? ` ・ 選択中 ${sel}件` : ""}</summary>${rhtml}${cs.length && rnd.length ? `<div class="subh">AIのおすすめ</div>` : ""}${cs.map(c => { const ck = "c:" + c.id, op = openRows.has(ck);
-        return `<div class="cand ${op ? "open" : ""}"><div class="dtop"><button class="dtitle" type="button" data-tg="${esc(ck)}">${esc(c.title)}<span class="chev">${op ? "▲" : "▼"}</span></button><button class="btn ${picked.has(c.id) ? "" : "ghost"}" type="button" data-c="${esc(c.id)}" aria-pressed="${picked.has(c.id)}">${picked.has(c.id) ? "選択中 ✓" : "これにする"}</button></div><div class="dsub">${watchChip(c)}<span>${esc(KL[c.kind] || "")}</span>${c.filmarks != null ? `<span class="fmv">★${Number(c.filmarks).toFixed(1)}</span>` : ""}</div>${op ? `<div class="dmore"><span class="meta">${esc(c.service || "")}${c.airNote ? " ・ " + esc(c.airNote) : ""}${c.total ? ` ・ 全${esc(c.total)}話` : ""}</span>${watchLink(c) ? `<span class="meta">${watchLink(c)}${whenText(c)}</span>` : ""}${c.why ? `<span class="meta">${esc(c.why)}</span>` : ""}<span class="meta"><a class="ext" href="${esc(searchUrl(c.title, c.kind))}" target="_blank" rel="noopener noreferrer">ネットで検索</a></span></div>` : ""}</div>`; }).join("")}${cs.length ? `<button class="btn" type="button" data-ok="${k}" ${sel ? "" : "disabled"}>${sel ? `この${sel}件で確定する` : "選んでから確定する"}</button><span class="note">「これにする」は何件でも選べます。確定するまで候補は消えません。</span>` : ""}</details>`
+      ? `<details class="cands" data-d="${k}" data-ak="d:${k}" ${candOpen ? "open" : ""}><summary>候補（${cs.length + rnd.length}件）${sel ? ` ・ 選択中 ${sel}件` : ""}</summary>${cs.length && rnd.length ? `<div class="subh">この曜日のおすすめ</div>` : ""}${cs.map(c => { const ck = "c:" + c.id, op = openRows.has(ck), fresh = isFresh(k, c), st0 = startOfCand(c), upc = st0 && st0 > today();
+        return `<div class="cand ${op ? "open" : ""} ${fresh ? "isnew" : ""}" data-ak="c:${k}:${esc(c.id)}"><div class="dtop"><button class="dtitle" type="button" data-tg="${esc(ck)}">${fresh ? `<span class="newb">新着</span>` : ""}${esc(c.title)}<span class="chev">${op ? "▲" : "▼"}</span></button><button class="btn ${picked.has(c.id) ? "" : "ghost"}" type="button" data-c="${esc(c.id)}" aria-pressed="${picked.has(c.id)}">${picked.has(c.id) ? "選択中 ✓" : "これにする"}</button></div><div class="dsub">${upc ? `<span class="upb">${esc(mdw(st0))}から</span>` : ""}${watchChip(c)}<span>${esc(KL[c.kind] || "")}</span>${c.filmarks != null ? `<span class="fmv">★${Number(c.filmarks).toFixed(1)}</span>` : ""}</div>${op ? `<div class="dmore"><span class="meta">${esc(c.service || "")}${c.airNote ? " ・ " + esc(c.airNote) : ""}${c.total ? ` ・ 全${esc(c.total)}話` : ""}</span>${upc ? `<span class="meta" style="color:var(--butter-ink)">まだ放送・配信が始まっていません（${esc(mdw(st0))}から）。先に「これにする」で、追いかけ中に入れておけます。</span>` : ""}${watchLink(c) ? `<span class="meta">${watchLink(c)}${whenText(c)}</span>` : ""}${c.why ? `<span class="meta">${esc(c.why)}</span>` : ""}<span class="meta"><a class="ext" href="${esc(searchUrl(c.title, c.kind))}" target="_blank" rel="noopener noreferrer">ネットで検索</a></span></div>` : ""}</div>`; }).join("")}${cs.length ? `<button class="btn" type="button" data-ok="${k}" ${sel ? "" : "disabled"}>${sel ? `この${sel}件で確定する` : "選んでから確定する"}</button><span class="note">「これにする」は何件でも選べます。確定するまで候補は消えません。</span>` : ""}${rhtml}</details>`
       : `<p class="note">この曜日の候補はありません。</p>`;
-    return `<div class="drow ${k === tk ? "today" : ""}" data-ak="r:${k}"><div class="dday">${l}</div><div class="dbody">${items}${pick}</div></div>`;
+    const unN = rows.filter(r => !r.seen).length, isOpen = openDays.has(k);
+    const badges = `${k === tk ? `<span class="tbadge td">今日</span>` : ""}${!its.length ? `<span class="tbadge">未設定</span>` : ""}${unN ? `<span class="tbadge un">未視聴あり ${unN}</span>` : ""}${newN ? `<span class="tbadge nw">新着あり ${newN}</span>` : ""}`;
+    return `<section class="dayc ${k === tk ? "today" : ""} ${isOpen ? "open" : ""}" data-ak="r:${k}"><button class="dhead" type="button" data-day="${k}"><span class="dnm">${l}</span><span class="dbadges">${badges}</span><span class="chev">${isOpen ? "▲" : "▼"}</span></button>${isOpen ? `<div class="dbodyw">${items}${pick}</div>` : ""}</section>`;
   }).join("");
-  box.innerHTML = `<section class="sec"><h3>毎日の夜8時</h3>${refreshWarn()}${al.length ? `<p class="dalert">${ALERT_TEXT}（対象: ${al.map(([k]) => DL[k]).join("・")}）</p>` : ""}<div class="dlist" id="dloop">${Array.from({ length: LOOP_COPIES }, (_, c) => c).map(c => `<div class="dcopy" data-copy="${c}">${rowsOf(c)}</div>`).join("")}</div></section>`;
+  box.innerHTML = `<section class="sec">${refreshWarn()}<div class="dlist" id="dloop">${rowsOf(0)}</div></section>`;
+  box.querySelectorAll("[data-day]").forEach(b => b.onclick = () => {
+    const k = b.dataset.day, find = () => box.querySelector('[data-day="' + k + '"]'), top0 = b.getBoundingClientRect().top;
+    if (openDays.has(k)) { openDays.delete(k); delete freshIds[k]; }
+    else {
+      openDays.add(k);
+      // 開いたら、新着を確認したことにする（印は、開いているあいだだけ残す）
+      const its = itemsOf(daily[k]), cs = cands.filter(c => c.day === k && !its.some(x => normT(x.title) === normT(c.title)));
+      const fr = new Set(cs.filter(c => isNewCand(k, c)).map(c => c.id)); if (fr.size) { freshIds[k] = fr; const rec = candState[k] || { open: false }; candState[k] = { open: rec.open, ids: cs.map(c => c.id) }; store.set("daily-cand", candState); }
+    }
+    drawDaily(); keepPos(find, top0);
+  });
   box.querySelectorAll("[data-tg]").forEach(b => b.onclick = () => {
     // 押した作品名の画面上の位置を覚えておき、描き直したあと、同じ位置に同じ作品名が来るようにスクロールを合わせる（作品名を起点に開閉する）
     const k = b.dataset.tg, all = () => Array.from(box.querySelectorAll("[data-tg]")).filter(x => x.dataset.tg === k), idx = all().indexOf(b), top0 = b.getBoundingClientRect().top;
@@ -615,15 +633,13 @@ function drawDaily() {
   box.querySelectorAll("[data-ln]").forEach(b => b.onclick = () => { latestAsk = null; drawDaily(); });
   box.querySelectorAll("[data-c]").forEach(b => b.onclick = () => { const id = b.dataset.c; if (picked.has(id)) picked.delete(id); else picked.add(id); savePicked(); drawDaily(); });
   box.querySelectorAll("[data-ok]").forEach(b => b.onclick = () => { b.disabled = true; confirmPicks(b.dataset.ok).catch(() => { b.disabled = false; }); });
-  if (firstDraw) { firstDraw = false; scrollUntil = Date.now() + 3000; userScrolled = false; }
-  setupLoop(); scrollToToday(box); setTimeout(loopRecenter, 150);   // 念のため、真ん中のコピーの外（＝上に動かせない一番上など）にいたら戻す
   box.querySelectorAll("details[data-d] > summary").forEach(sm => sm.addEventListener("click", e => {
     e.preventDefault();
     const d = sm.parentElement, k = d.dataset.d, open = !d.open, its = itemsOf(daily[k]);
     const sums = () => Array.from(box.querySelectorAll('details[data-d="' + k + '"] > summary')), idx = sums().indexOf(sm), top0 = sm.getBoundingClientRect().top;
-    candState[k] = { open, ids: cands.filter(c => c.day === k && !its.some(x => normT(x.title) === normT(c.title))).map(c => c.id) };
+    candState[k] = { open, ids: cands.filter(c => c.day === k && !its.some(x => normT(x.title) === normT(c.title))).map(c => c.id) }; delete freshIds[k];
     store.set("daily-cand", candState);
-    box.querySelectorAll('details[data-d="' + k + '"]').forEach(x => { x.open = open; });   // 5つのコピーをそろえる
+    box.querySelectorAll('details[data-d="' + k + '"]').forEach(x => { x.open = open; });
     keepPos(() => sums()[idx], top0);   // 折りたたみの見出しを起点に開閉する
   }));
   box.querySelectorAll("details[data-sf] > summary").forEach(sm => sm.addEventListener("click", e => {
@@ -632,7 +648,7 @@ function drawDaily() {
     const sums = () => Array.from(box.querySelectorAll('details[data-sf="' + k + '"] > summary')), idx = sums().indexOf(sm), top0 = sm.getBoundingClientRect().top;
     if (open) seenState[k] = true; else delete seenState[k];
     store.set("daily-seenf", seenState);
-    box.querySelectorAll('details[data-sf="' + k + '"]').forEach(x => { x.open = open; });   // 5つのコピーをそろえる
+    box.querySelectorAll('details[data-sf="' + k + '"]').forEach(x => { x.open = open; });
     keepPos(() => sums()[idx], top0);
   }));
   box.querySelectorAll("[data-x]").forEach(b => b.onclick = async () => {
@@ -641,38 +657,6 @@ function drawDaily() {
   });
 }
 
-// 曜日の一覧を5つ並べて、真ん中のコピーを見る。スクロールが止まったら、見た目が同じ位置（真ん中のコピーの中）へ静かに戻す。
-// 動かしているあいだは触らない（iPhoneは、指で動かしている最中に位置を飛ばすと、そこで動かなくなるため）。
-// 勢いよく動かして端のコピーまで来てしまったときだけ、すぐ戻す
-let loopBound = false;
-function loopGeom() {
-  const cs = document.querySelectorAll("#dloop .dcopy"); if (cs.length !== LOOP_COPIES) return null;
-  const top = el => el.getBoundingClientRect().top + scY(), a = top(cs[0]), H = top(cs[1]) - a;
-  return H < 200 ? null : { a, H, mid: top(cs[LOOP_MID]), end: a + H * LOOP_COPIES };
-}
-function loopRecenter() {
-  if (view !== "follow") return; const g = loopGeom(); if (!g) return;
-  const y = scY(); if (y >= g.mid && y < g.mid + g.H) return;
-  scTo(y - Math.floor((y - g.mid) / g.H) * g.H);
-}
-function setupLoop() {
-  if (loopBound) return; loopBound = true;
-  let timer = 0;
-  window.addEventListener("scroll", () => {
-    if (view !== "follow") return;
-    clearTimeout(timer); timer = setTimeout(loopRecenter, 160);
-    const g = loopGeom(); if (g && (scY() < g.a + 200 || scY() + window.innerHeight > g.end - 200)) loopRecenter();
-  }, { passive: true, capture: true });   // body が動く場合、scrollイベントは window まで届かないので、捕まえる側（capture）で受ける
-}
-// 期間限定配信（上に固定）: 自分で入れた「配信終了日」がある作品と、AIが調べた期間限定配信のおすすめ
-function limItems() {
-  const t = today();
-  const own = works.filter(w => w.deadline && w.status !== "watched" && w.status !== "dropped").map(w => ({ title: w.title, kind: w.kind, until: w.deadline, service: w.service || "", id: w.id, ai: false }))
-    .filter(x => { const d = Math.ceil((Date.parse(x.until + "T00:00:00") - Date.now()) / 864e5); return !isNaN(d) && d >= -3 && d <= 60; });
-  const ai = (picks || []).filter(x => !x.until || x.until >= t).map(x => ({ title: x.title, kind: x.kind, until: x.until || "", service: x.service || "", why: x.why || "", url: x.url || "", ai: true }));
-  return own.concat(ai.filter(a => !own.some(o => sameTitle(o.title, a.title))));
-}
-// 期限つきの契約（例: U-NEXT 〜11/12）。その配信サイトで見放題の「観たい」作品（Filmarksの配信情報。毎朝、少しずつ調べる）を出す
 const SVC_ALIAS = { "disney+": ["ディズニープラス"] };
 // その作品が、x 以外の「契約中の有料サービス」で見られるときの、サービス名のリスト（Filmarksの配信情報による）
 function otherSvcs(w, x) {
@@ -688,33 +672,15 @@ function svcTitles(x) {
   return works.filter(w => w.status === "queue" && String(w.vod || "").split(/[、,]/).some(v => { const m = normT(v); return m && (m.includes(n) || n.includes(m)); }))
     .map(w => ({ w, others: otherSvcs(w, x) })).sort((a, b) => (a.others.length ? 1 : 0) - (b.others.length ? 1 : 0) || f(b.w) - f(a.w));
 }
-const svcLeft = x => Math.ceil((Date.parse(x.until + "T00:00:00") - Date.now()) / 864e5);
-let limOpen = -1;
-function drawLim() {
-  const el = $("#limBar"); if (!el) return;
-  const md0 = u => `${Number(u.slice(5, 7))}/${Number(u.slice(8, 10))}`;
-  const sl = loaded ? services.map((x, i) => [x, i]).filter(([x]) => x.until && x.until >= today() && svcLeft(x) <= 60) : [];
-  const items = loaded ? limItems() : [];
-  const md = u => u ? ` ${Number(u.slice(5, 7))}/${Number(u.slice(8, 10))}まで` : "";
-  const chipOf = (w, others) => `<a class="limc" href="#w-${esc(w.id)}"><b>${esc(w.title)}</b><small>${esc(KL[w.kind] || "")}${w.avg != null ? " ・★" + w.avg.toFixed(1) : ""}${others.length ? " ・" + esc(others.join("・")) + "でも" : ""}</small></a>`;
-  const panel = limOpen >= 0 && services[limOpen] ? (() => { const x = services[limOpen], ts = svcTitles(x), only = ts.filter(t => !t.others.length);
-    return `<div class="limpanel"><b>${esc(x.name)}（〜${md0(x.until)}）でしか見られない「観たい」作品</b>${only.length ? `<div class="limrow2">${only.map(t => chipOf(t.w, t.others)).join("")}</div>` : `<span class="note">${ts.length ? "ありません（見られる作品は、契約中の他のサービスでも見られます）" : "まだ見つかっていません（毎朝、観たい作品の配信先を少しずつ調べています）"}</span>`}<span class="note">Filmarksの配信情報です（実際より遅れていることがあります）。他のサービスで見られると分かった作品は、作品のページの「見られる場所」にサービス名（例: Netflix）を入れると、ここから外れます。見放題かどうかは、配信サイトで確認してください。</span></div>`; })() : "";
-  el.innerHTML = `<span class="limh">期間限定</span>` + sl.map(([x, i]) => `<button class="limc svc ${limOpen === i ? "on" : ""}" type="button" data-svc="${i}"><b>${esc(x.name)} 〜${md0(x.until)}</b><small>契約あと${svcLeft(x)}日 ・ ここでしか見られない観たい${svcTitles(x).filter(t => !t.others.length).length}件</small></button>`).join("") + (items.length
-    ? `<div class="limrow">${items.map(x => `<a class="limc ${x.ai ? "ai" : ""}" href="${esc(x.id ? "#w-" + x.id : (x.url || searchUrl(x.title, x.kind)))}" ${x.id ? "" : 'target="_blank" rel="noopener noreferrer"'} title="${esc(x.why || "")}"><b>${esc(x.title)}</b><small>${esc(x.service)}${esc(md(x.until))}${x.ai ? " ・AI調べ" : ""}</small></a>`).join("")}</div>`
-    : (sl.length ? "" : `<span class="limn">作品の「配信終了日」を入れると、ここに出ます（相談で「◯◯が◯/◯まで」と伝えてもOK）</span>`)) + panel;
-  el.querySelectorAll("[data-svc]").forEach(b => b.onclick = () => { limOpen = limOpen === +b.dataset.svc ? -1 : +b.dataset.svc; drawLim(); });
-}
 
-// ===== 追いかけ（曜日ごとの毎週の作品。月〜日をぐるぐる） =====
+// ===== 追いかけ（曜日ごとの毎週の作品。月〜日の一覧。タップで、その曜日が開く） =====
 function renderFollow() {
-  app.innerHTML = header("曜日ごとの毎週の作品", "") + `<div class="limbar" id="limBar"></div><div id="dailyBox"></div>`;
+  app.innerHTML = header("曜日ごとの毎週の作品", "") + `<div id="dailyBox"></div>`;
   bindTabs();
-  const sr = app.querySelector(".subrow"); if (sr) { sr.classList.add("stk"); const lb = $("#limBar"); if (lb) lb.style.top = sr.offsetHeight + "px"; }
-  scrollUntil = 0; userScrolled = false; firstDraw = true;   // 今日の位置への移動は、データが入って最初に描いた時点から3秒間（読み込みが遅くても間に合うように）
-  drawFollow();
+  firstDraw = true; drawFollow();
 }
 function drawFollow() {
-  drawLim(); drawDaily();
+  drawDaily();
   const sub = $("#sub"); if (sub) sub.textContent = `${DAYS.reduce((n, [k]) => n + itemsOf(daily[k]).length, 0)}作品を毎週追いかけ中`;
 }
 
@@ -1228,7 +1194,7 @@ function renderChat() {
   $("#backList").onclick = () => { location.hash = "chat"; };
   $("#newChat").onclick = () => { if (chatBusy) return; turns = []; chatLog = []; saveChat(); drawChatLog(); };
   if (c.kind === "taste") drawTaste(); if (c.kind === "services") drawServices();
-  drawChatLog(); scTo(document.body.scrollHeight);
+  drawChatLog(); scTo(scEl().scrollHeight);
 }
 function drawChatLog(streamText) {
   const el = $("#chatLog"); if (!el) return;
@@ -1260,7 +1226,7 @@ async function send(text) {
   if (!text || chatBusy || !sample || dbState !== "ready") return;
   const input = $("#chatInput"); if (input) { input.value = ""; input.style.height = "auto"; }
   chatLog.push({ kind: "me", text }); turns.push({ role: "user", content: text });
-  chatBusy = true; chatCtl = new AbortController(); saveChat(); drawChatLog(); scTo(document.body.scrollHeight);
+  chatBusy = true; chatCtl = new AbortController(); saveChat(); drawChatLog(); scTo(scEl().scrollHeight);
   let last = "";
   try {
     const res = await sample([{ role: "user", content: RULES + (KIND_RULES[(chats.find(x => x.id === chatId) || {}).kind || "free"] || "") + "\n\n" + buildContext() + "\n\n（ここから会話）" }, ...turns.slice(-20)], {
@@ -1279,7 +1245,7 @@ async function send(text) {
     chatLog.push({ kind: "err", text: msgs[e?.code] || ("通信に失敗しました。もう一度送ってください。" + (e?.message ? "（" + String(e.message).slice(0, 90) + "）" : "")) });
     
   }
-  chatBusy = false; chatCtl = null; saveChat(); drawChatLog(); scTo(document.body.scrollHeight);
+  chatBusy = false; chatCtl = null; saveChat(); drawChatLog(); scTo(scEl().scrollHeight);
 }
 
 parseHash(); renderView();

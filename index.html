@@ -377,9 +377,51 @@ html, body { overflow-x: hidden; }
 .numin.lin { width: 3.6em; }
 .lask { display: grid; gap: 6px; border-top: 1px dashed var(--alert); padding-top: 6px; margin-top: 2px; font-size: .85rem; color: var(--alert); font-weight: 700; }
 .lask .rrow { display: flex; gap: 8px; }
+
+/* ===== 2026-11-21 画面の整理 ===== */
+/* 画面全体はスクロールさせず、ステータスバーの下に置いた枠（#scr）の中だけを動かす。iPhone（iOS 26）で、ステータスバーの下に潜り込む内容に、システムがぼかし（もや）をかけるのを避けるため */
+html, body { height: 100%; overflow: hidden; background: var(--bg); }
+:root { padding-top: 0 !important; padding-bottom: 0 !important; }
+#scr { position: fixed; top: env(safe-area-inset-top, 0px); left: 0; right: 0; bottom: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; overscroll-behavior-y: contain; }
+/* 下のバーは、画面の一番下まで下げる（隙間なし）。下の安全領域（ホームバー）の分は、バーの中の余白にする */
+.tabs { left: 0; right: 0; bottom: 0; transform: none; width: 100%; max-width: none; border-radius: 22px 22px 0 0; border-width: 1px 0 0 0; padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px)); box-shadow: 0 -4px 16px rgba(50, 60, 140, .10); }
+.wrap { padding-bottom: calc(92px + env(safe-area-inset-bottom, 0px)); }
+/* 観たい・記録の作品: タイトル（1段目）、種類・相性・見られる場所（2段目）。スコアは右。1件を、ふだんは2段に */
+.card { padding: 7px 12px; gap: 0 10px; align-items: center; }
+.card .cmain { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 7px; min-width: 0; }
+.card h3 { order: 1; flex: 0 0 100%; min-width: 0; font-size: .95rem; line-height: 1.3; }
+.card .cline { display: contents; }
+.card .cline > * { order: 2; font-size: .68rem; }
+.card .meta { order: 3; flex: 0 1 auto; font-size: .72rem; }
+.card .snip { order: 4; flex: 0 0 100%; font-size: .72rem; }
+.card .tag { display: none; }
+.card .score b { font-size: 1.1rem; }
+/* 候補の1件: タイトルとボタンを1行、チップは2行目に横並び（ボタンを横長にしない） */
+.cand { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; align-items: center; padding: 6px 8px; }
+.cand > .dtop { display: contents; }
+.cand > .dtop > .dtitle { grid-column: 1; white-space: normal; overflow: visible; }
+.cand > .dtop > .btn { grid-column: 2; justify-self: end; width: auto; padding: 3px 11px; font-size: .8rem; white-space: nowrap; }
+.cand > .dsub { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: center; }
+.cand > .dmore { grid-column: 1 / -1; display: grid; }
+.cand.isnew { border-color: var(--accent); background: var(--lav); }
+.newb { font-size: .66rem; font-weight: 700; color: #fff; background: var(--accent); border-radius: 999px; padding: 0 7px; margin-right: 6px; vertical-align: 1px; }
+.upb { font-size: .7rem; font-weight: 700; color: var(--butter-ink); background: var(--butter); border-radius: 999px; padding: 0 8px; }
+/* 追いかけ: 月〜日の一覧（タップで開く） */
+.dlist { display: grid; gap: 6px; }
+.dayc { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
+.dayc.today { border-color: var(--accent); }
+.dhead { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: none; border: 0; text-align: left; cursor: pointer; font: inherit; color: var(--ink); }
+.dhead .dnm { font-family: var(--font-display); font-weight: 700; font-size: 1.15rem; color: var(--accent); width: 1.5rem; flex: none; }
+.dhead .dbadges { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.dhead .chev { flex: none; color: var(--muted); font-size: .66rem; }
+.tbadge { font-size: .7rem; font-weight: 700; border-radius: 999px; padding: 1px 9px; background: var(--lav); color: var(--muted); }
+.tbadge.td { background: var(--accent); color: #fff; }
+.tbadge.un { background: var(--butter); color: var(--butter-ink); }
+.tbadge.nw { background: var(--alert-fill); color: var(--alert); }
+.dbodyw { display: grid; gap: 8px; min-width: 0; padding: 8px 10px 10px; border-top: 1px dashed var(--line); }
 </style>
 
-<div class="wrap" id="app" lang="ja"></div>
+<div id="scr"><div class="wrap" id="app" lang="ja"></div></div>
 
 <script src="app.js"></script>
 
