@@ -150,6 +150,21 @@ async function reloadAll() {
   } catch (e) { if (!loaded) { dbState = "off"; loadError = e.message || ""; } }
   refresh();
 }
+// 前回のデータを端末に控えておき、開いた直後はそれをすぐ表示する。そのあと、サーバーから最新を取り直して入れ替える（サーバーの返事に数秒かかるため）
+const CACHE_KEY = "sakuhinCache1";
+function loadCache() {
+  try {
+    const c = JSON.parse(localStorage.getItem(CACHE_KEY) || "null"); if (!c || c.v !== 1 || !c.works) return false;
+    works = c.works; daily = c.daily || {}; cands = c.cands || []; taste = c.taste || {}; services = c.services || []; picks = c.picks || []; sheetUrl = c.sheetUrl || ""; refreshInfo = c.refreshInfo || null;
+    loaded = true; dbState = "ready"; return true;
+  } catch (e) { return false; }
+}
+let cacheTimer = 0;
+function saveCacheSoon() {
+  clearTimeout(cacheTimer);
+  cacheTimer = setTimeout(() => { try { localStorage.setItem(CACHE_KEY, JSON.stringify({ v: 1, works, daily, cands, taste, services, picks, sheetUrl, refreshInfo, at: Date.now() })); } catch (e) {} }, 1000);
+}
+loadCache();
 reloadAll();
 document.addEventListener("visibilitychange", () => { if (!document.hidden && Date.now() - lastLoad > 60000) reloadAll(); });
 // 右上の「今すぐ更新」: サーバーで最新話・★を取り直す（毎朝の自動更新と同じ処理）
@@ -180,6 +195,7 @@ function renderView() {
   if (view !== "chat" && view !== "follow") scTo(0);
 }
 function refresh() {
+  if (loaded) saveCacheSoon();
   const sd = $("#syncd"); if (sd) sd.outerHTML = syncHtml();
   if (view === "watched" || view === "queue") { if (!(openCard && formDirty)) drawList(); }   // 入力中は、データ更新で入力を消さない
   else if (view === "follow") { if (!formDirty) drawFollow(); }
